@@ -1,0 +1,11 @@
+[[package]]
+name = "rustman"
+version = "0.1.0"
+dependencies = [
+ "rustman-6500 0.1.0",
+]
+
+[[package]]
+name = "rustman-6500"
+version = "0.1.0"
+
