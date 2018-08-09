@@ -221,7 +221,7 @@ impl CPU6500 {
                 let real_addr = cpu.reg_y as u16 + val;
                 let new_hi = real_addr & 0xFF00;
                 if hi != new_hi {
-                    cpu.read(hi + (real_addr & 0xFF), move |cpu, val| {
+                    cpu.read(hi + (real_addr & 0xFF), move |cpu, _| {
                         f(cpu, real_addr)
                     })
                 } else {
