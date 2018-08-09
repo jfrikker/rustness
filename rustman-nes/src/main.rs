@@ -36,6 +36,13 @@ pub fn main() -> io::Result<()> {
                 return Ok(())
             }
         };
-        println!("{:x?}", io_req);
+        println!("{}: {:x?}", cpu.cycle_count(), io_req);
+        if cpu.cycle_count() == 100000 {
+            println!("nmi");
+            io_req = cpu.nmi();
+            println!("{}: {:x?}", cpu.cycle_count(), io_req);
+        } else if cpu.cycle_count() > 100500 {
+            return Ok(())
+        }
     }
 }

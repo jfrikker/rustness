@@ -36,6 +36,7 @@ pub struct CPU6500 {
     flag_c: bool,
     flag_i: bool,
     flag_d: bool,
+    cycle_count: u128,
     continuation: Continuation
 }
 
@@ -53,12 +54,20 @@ impl CPU6500 {
             flag_c: false,
             flag_i: false,
             flag_d: false,
+            cycle_count: 0,
             continuation: Continuation::new(|_, _| panic!("WHAT??!?"))
         }
     }
 
     pub fn reset(&mut self) -> IORequest {
         self.read_u16(0xFFFC, |cpu, val| {
+            cpu.reg_pc = val;
+            cpu.execute()
+        })
+    }
+
+    pub fn nmi(&mut self) -> IORequest {
+        self.read_u16(0xFFFA, |cpu, val| {
             cpu.reg_pc = val;
             cpu.execute()
         })
@@ -92,6 +101,10 @@ impl CPU6500 {
         continuation.apply(self, None)
     }
 
+    pub fn cycle_count(&self) -> u128 {
+        self.cycle_count
+    }
+
     fn execute(&mut self) -> IORequest {
         let pc = self.reg_pc;
         self.read(pc, CPU6500::execute_op)
@@ -116,19 +129,25 @@ impl CPU6500 {
             0x91 => self.ind_y_addr(CPU6500::sta),
             0x99 => self.abs_y_addr(CPU6500::sta),
             0x9a => self.implied(CPU6500::txs),
+            0x9d => self.abs_x_addr(CPU6500::sta),
             0xd8 => self.implied(CPU6500::cld),
             0xa0 => self.imm(CPU6500::ldy),
             0xa2 => self.imm(CPU6500::ldx),
             0xa9 => self.imm(CPU6500::lda),
+            0xac => self.abs(CPU6500::ldy),
             0xad => self.abs(CPU6500::lda),
+            0xae => self.abs(CPU6500::ldx),
             0xb0 => self.rel_addr(CPU6500::bcs),
+            0xb1 => self.ind_y(CPU6500::lda),
             0xbd => self.abs_x(CPU6500::lda),
+            0xbe => self.abs_y(CPU6500::ldx),
             0xc0 => self.imm(CPU6500::cpy),
             0xc8 => self.implied(CPU6500::iny),
             0xc9 => self.imm(CPU6500::cmp),
             0xca => self.implied(CPU6500::dex),
             0xd0 => self.rel_addr(CPU6500::bne),
             0xe0 => self.imm(CPU6500::cpx),
+            0xee => self.abs_addr(CPU6500::inc),
             op => return IORequest::Fault(op)
         }
     }
@@ -139,19 +158,31 @@ impl CPU6500 {
         })
     }
 
-    fn abs_x<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
-        let addr = self.reg_pc + 1;
-        self.reg_pc += 3;
-        self.read_u16(addr, |cpu, val| {
-            let addr = val + cpu.reg_x as u16;
-            cpu.read(addr, f)
-        })
-    }
-
     fn abs_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
         let addr = self.reg_pc + 1;
         self.reg_pc += 3;
         self.read_u16(addr, f)
+    }
+
+    fn abs_x<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.abs_x_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
+    }
+
+    fn abs_x_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
+        let addr = self.reg_pc + 1;
+        self.reg_pc += 3;
+        self.read_u16(addr, |cpu, val| {
+            let addr = val + cpu.reg_x as u16;
+            f(cpu, addr)
+        })
+    }
+
+    fn abs_y<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.abs_y_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
     }
 
     fn abs_y_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
@@ -165,7 +196,8 @@ impl CPU6500 {
 
     fn implied<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, f: T) -> IORequest {
         self.reg_pc += 1;
-        f(self)
+        let pc = self.reg_pc;
+        self.read(pc, |cpu, _| f(cpu))
     }
 
     fn imm<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
@@ -174,13 +206,27 @@ impl CPU6500 {
         self.read(addr, f)
     }
 
+    fn ind_y<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.ind_y_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
+    }
+
     fn ind_y_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
         let addr = self.reg_pc + 1;
         self.reg_pc += 2;
-        self.read(addr, |cpu, val| {
-            cpu.read_u16(val as u16, |cpu, val| {
-                let addr = cpu.reg_y as u16 + val;
-                f(cpu, addr)
+        self.read(addr, move |cpu, val| {
+            cpu.read_u16(val as u16, move |cpu, val| {
+                let hi = addr & 0xFF00;
+                let real_addr = cpu.reg_y as u16 + val;
+                let new_hi = real_addr & 0xFF00;
+                if hi != new_hi {
+                    cpu.read(hi + (real_addr & 0xFF), move |cpu, val| {
+                        f(cpu, real_addr)
+                    })
+                } else {
+                    f(cpu, addr)
+                }
             })
         })
     }
@@ -285,6 +331,14 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn inc(&mut self, addr: u16) -> IORequest {
+        self.read(addr, move |cpu, val| {
+            let val = val.wrapping_add(1);
+            cpu.set_nz(val);
+            cpu.write(addr, val, |cpu| cpu.execute())
+        })
+    }
+
     fn iny(&mut self) -> IORequest {
         self.reg_y = self.reg_y.wrapping_add(1);
         let reg_y = self.reg_y;
@@ -377,6 +431,7 @@ impl CPU6500 {
         self.continuation = Continuation::new(
             move |cpu, val| continuation(cpu, val.unwrap())
         );
+        self.cycle_count += 1;
         IORequest::Read(addr)
     }
 
@@ -384,6 +439,7 @@ impl CPU6500 {
         self.continuation = Continuation::new(
             move |cpu, _| continuation(cpu)
         );
+        self.cycle_count += 1;
         IORequest::Write(addr, val)
     }
 }
