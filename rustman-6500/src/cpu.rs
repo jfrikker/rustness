@@ -152,9 +152,16 @@ impl CPU6500 {
             0x09 => self.imm(CPU6500::ora),
             0x10 => self.rel_addr(CPU6500::bpl),
             0x20 => self.abs_addr(CPU6500::jsr),
+            0x21 => self.ind_x(CPU6500::and),
+            0x24 => self.zpg(CPU6500::bit),
+            0x25 => self.zpg(CPU6500::and),
             0x29 => self.imm(CPU6500::and),
             0x2a => self.implied(CPU6500::rol_a),
             0x2c => self.abs(CPU6500::bit),
+            0x2d => self.abs(CPU6500::and),
+            0x31 => self.ind_y(CPU6500::and),
+            0x35 => self.zpg_x(CPU6500::and),
+            0x39 => self.abs_y(CPU6500::and),
             0x3d => self.abs_x(CPU6500::and),
             0x48 => self.implied(CPU6500::pha),
             0x4a => self.implied(CPU6500::lsr_a),
@@ -184,12 +191,26 @@ impl CPU6500 {
             0xbd => self.abs_x(CPU6500::lda),
             0xbe => self.abs_y(CPU6500::ldx),
             0xc0 => self.imm(CPU6500::cpy),
+            0xc1 => self.ind_x(CPU6500::cmp),
+            0xc4 => self.zpg(CPU6500::cpy),
+            0xc5 => self.zpg(CPU6500::cmp),
             0xc8 => self.implied(CPU6500::iny),
             0xc9 => self.imm(CPU6500::cmp),
             0xca => self.implied(CPU6500::dex),
+            0xcc => self.abs(CPU6500::cpy),
+            0xcd => self.abs(CPU6500::cmp),
             0xd0 => self.rel_addr(CPU6500::bne),
+            0xd1 => self.ind_y(CPU6500::cmp),
+            0xd5 => self.zpg_x(CPU6500::cmp),
+            0xd9 => self.abs_y(CPU6500::cmp),
+            0xdd => self.abs_x(CPU6500::cmp),
             0xe0 => self.imm(CPU6500::cpx),
+            0xe4 => self.zpg(CPU6500::cpx),
+            0xe6 => self.zpg_addr(CPU6500::inc),
+            0xec => self.abs(CPU6500::cpx),
             0xee => self.abs_addr(CPU6500::inc),
+            0xf6 => self.zpg_x_addr(CPU6500::inc),
+            0xfe => self.abs_x_addr(CPU6500::inc),
             op => return IORequest::Fault(op)
         }
     }
@@ -236,16 +257,35 @@ impl CPU6500 {
         })
     }
 
+    fn imm<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        let addr = self.reg_pc + 1;
+        self.reg_pc += 2;
+        self.read(addr, f)
+    }
+
     fn implied<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, f: T) -> IORequest {
         self.reg_pc += 1;
         let pc = self.reg_pc;
         self.read(pc, |cpu, _| f(cpu))
     }
 
-    fn imm<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+    fn ind_x<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.ind_x_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
+    }
+
+    fn ind_x_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
         let addr = self.reg_pc + 1;
         self.reg_pc += 2;
-        self.read(addr, f)
+        self.read(addr, move |cpu, val| {
+            cpu.read_u16(val as u16, move |cpu, val| {
+                let hi = addr & 0xFF00;
+                let mut real_addr = cpu.reg_x as u16 + val;
+                real_addr = hi | (real_addr & 0xFF);
+                f(cpu, addr)
+            })
+        })
     }
 
     fn ind_y<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
@@ -297,6 +337,36 @@ impl CPU6500 {
         self.reg_pc += 2;
         self.read(addr, |cpu, val| {
             f(cpu, val as u16)
+        })
+    }
+
+    fn zpg_x<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.zpg_x_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
+    }
+
+    fn zpg_x_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
+        let addr = self.reg_pc + 1;
+        self.reg_pc += 2;
+        self.read(addr, |cpu, val| {
+            let reg_x = cpu.reg_x;
+            f(cpu, val.wrapping_add(reg_x) as u16)
+        })
+    }
+
+    fn zpg_y<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.zpg_y_addr(|cpu, addr| {
+            cpu.read(addr, f)
+        })
+    }
+
+    fn zpg_y_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
+        let addr = self.reg_pc + 1;
+        self.reg_pc += 2;
+        self.read(addr, |cpu, val| {
+            let reg_y = cpu.reg_y;
+            f(cpu, val.wrapping_add(reg_y) as u16)
         })
     }
 
