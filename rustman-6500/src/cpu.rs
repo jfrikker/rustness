@@ -1,7 +1,7 @@
 use std::boxed::FnBox;
 use std::mem::swap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IORequest {
     Read(u16),
     Write(u16, u8),
@@ -46,7 +46,7 @@ impl CPU6500 {
             reg_a: 0,
             reg_x: 0,
             reg_y: 0,
-            reg_sp: 0,
+            reg_sp: 0xff,
             reg_pc: 0,
             flag_n: false,
             flag_v: false,
@@ -66,6 +66,11 @@ impl CPU6500 {
         })
     }
 
+    pub fn run_from(&mut self, addr: u16) -> IORequest {
+        self.reg_pc = addr;
+        self.execute()
+    }
+
     pub fn nmi(&mut self) -> IORequest {
         self.read_u16(0xFFFA, |cpu, val| {
             cpu.reg_pc = val;
@@ -81,10 +86,40 @@ impl CPU6500 {
         })
     }
 
-    fn write_u16<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, addr: u16, val: u16, continuation: T) -> IORequest {
+    /*fn write_u16<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, addr: u16, val: u16, continuation: T) -> IORequest {
         self.write(addr + 1, (val >> 8) as u8, move |cpu| {
             cpu.write(addr, (val & 0xFF) as u8, move |cpu2| {
                 continuation(cpu2)
+            })
+        })
+    }*/
+
+    fn push<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, val: u8, continuation: T) -> IORequest {
+        let reg_sp = self.reg_sp;
+        let write_addr = 0x100 + (reg_sp as u16);
+        self.reg_sp = reg_sp.wrapping_sub(1);
+        self.write(write_addr, val, continuation)
+    }
+
+    fn push_u16<T: 'static + FnOnce(&mut CPU6500) -> IORequest>(&mut self, val: u16, continuation: T) -> IORequest {
+        self.push((val >> 8) as u8, move |cpu| {
+            cpu.push((val & 0xFF) as u8, move |cpu2| {
+                continuation(cpu2)
+            })
+        })
+    }
+
+    fn pop<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, continuation: T) -> IORequest {
+        let reg_sp = self.reg_sp.wrapping_add(1);
+        let read_addr = 0x100 + (reg_sp as u16);
+        self.reg_sp = reg_sp;
+        self.read(read_addr, continuation)
+    }
+
+    fn pop_u16<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, continuation: T) -> IORequest {
+        self.pop(move |cpu, val| {
+            cpu.pop(move |cpu2, val2| {
+                continuation(cpu2, ((val2 as u16) << 8) + (val as u16))
             })
         })
     }
@@ -113,13 +148,19 @@ impl CPU6500 {
     fn execute_op(&mut self, opcode: u8) -> IORequest {
         println!("running {:x?}", opcode);
         match opcode {
+            0x05 => self.zpg(CPU6500::ora),
             0x09 => self.imm(CPU6500::ora),
             0x10 => self.rel_addr(CPU6500::bpl),
             0x20 => self.abs_addr(CPU6500::jsr),
             0x29 => self.imm(CPU6500::and),
+            0x2a => self.implied(CPU6500::rol_a),
             0x2c => self.abs(CPU6500::bit),
+            0x3d => self.abs_x(CPU6500::and),
+            0x48 => self.implied(CPU6500::pha),
+            0x4a => self.implied(CPU6500::lsr_a),
             0x4c => self.abs_addr(CPU6500::jmp),
             0x60 => self.implied(CPU6500::rts),
+            0x68 => self.implied(CPU6500::pla),
             0x78 => self.implied(CPU6500::sei),
             0x85 => self.zpg_addr(CPU6500::sta),
             0x86 => self.zpg_addr(CPU6500::stx),
@@ -134,6 +175,7 @@ impl CPU6500 {
             0xa0 => self.imm(CPU6500::ldy),
             0xa2 => self.imm(CPU6500::ldx),
             0xa9 => self.imm(CPU6500::lda),
+            0xaa => self.implied(CPU6500::tax),
             0xac => self.abs(CPU6500::ldy),
             0xad => self.abs(CPU6500::lda),
             0xae => self.abs(CPU6500::ldx),
@@ -221,7 +263,7 @@ impl CPU6500 {
                 let real_addr = cpu.reg_y as u16 + val;
                 let new_hi = real_addr & 0xFF00;
                 if hi != new_hi {
-                    cpu.read(hi + (real_addr & 0xFF), move |cpu, val| {
+                    cpu.read(hi + (real_addr & 0xFF), move |cpu, _| {
                         f(cpu, real_addr)
                     })
                 } else {
@@ -241,6 +283,12 @@ impl CPU6500 {
                 cpu.reg_pc - (0xFF - (val as u16)) - 1
             };
             f(cpu, addr)
+        })
+    }
+
+    fn zpg<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
+        self.zpg_addr(|cpu, addr| {
+            cpu.read(addr, f)
         })
     }
 
@@ -353,9 +401,7 @@ impl CPU6500 {
 
     fn jsr(&mut self, addr: u16) -> IORequest {
         let ret_addr = self.reg_pc - 1;
-        let write_addr = 0x100 + (self.reg_sp as u16) - 1;
-        self.write_u16(write_addr, ret_addr, move |cpu| {
-            cpu.reg_sp = cpu.reg_sp.wrapping_sub(2);
+        self.push_u16(ret_addr, move |cpu| {
             cpu.reg_pc = addr;
             cpu.execute()
         })
@@ -379,6 +425,14 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn lsr_a(&mut self) -> IORequest {
+        let reg_a = self.reg_a;
+        self.flag_c = reg_a & 0x01 != 0;
+        self.flag_z = reg_a == 0;
+        self.reg_a = reg_a >> 1;
+        self.execute()
+    }
+
     fn ora(&mut self, val: u8) -> IORequest {
         self.reg_a = self.reg_a | val;
         let reg_a = self.reg_a;
@@ -386,10 +440,34 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn pha(&mut self) -> IORequest {
+        let reg_a = self.reg_a;
+        self.push(reg_a, CPU6500::execute)
+    }
+
+    fn pla(&mut self) -> IORequest {
+        self.pop(|cpu, val| {
+            cpu.reg_a = val;
+            cpu.set_nz(val);
+            cpu.execute()
+        })
+    }
+
+    fn rol_a(&mut self) -> IORequest {
+        let mut reg_a = self.reg_a;
+        let carry = reg_a & 0x80 != 0;
+        reg_a = reg_a << 1;
+        if self.flag_c {
+            reg_a += 1;
+        }
+        self.flag_c = carry;
+        self.flag_z = reg_a == 0;
+        self.reg_a = reg_a;
+        self.execute()
+    }
+
     fn rts(&mut self,) -> IORequest {
-        let sp = 0x100 + (self.reg_sp as u16) + 1;
-        self.reg_sp = self.reg_sp.wrapping_add(2);
-        self.read_u16(sp, |cpu, val| {
+        self.pop_u16(|cpu, val| {
             cpu.reg_pc = val + 1;
             cpu.execute()
         })
@@ -408,6 +486,13 @@ impl CPU6500 {
     fn stx(&mut self, addr: u16) -> IORequest {
         let val = self.reg_x;
         self.write(addr, val, |cpu| cpu.execute())
+    }
+
+    fn tax(&mut self) -> IORequest {
+        self.reg_x = self.reg_a;
+        let reg_x = self.reg_x;
+        self.set_nz(reg_x);
+        self.execute()
     }
 
     fn txa(&mut self) -> IORequest {
@@ -441,5 +526,83 @@ impl CPU6500 {
         );
         self.cycle_count += 1;
         IORequest::Write(addr, val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cpu::*;
+    use cpu::IORequest::*;
+
+    #[test]
+    fn test_lda() {
+        let mut mem = [0xa9, 0x66, 0x85, 0x04, 0x00];
+        let mut cpu = CPU6500::new();
+        let actual = run_test(&mut cpu, 5, &mut mem);
+        assert_eq!(vec!(
+            Read(0x00),
+            Read(0x01),
+            Read(0x02),
+            Read(0x03),
+            Write(0x0004, 0x66)
+        ), actual);
+        assert_eq!(false, cpu.flag_n);
+        assert_eq!(false, cpu.flag_z);
+    }
+
+    #[test]
+    fn test_subroutine() {
+        let mut mem = [0x20, 0x04, 0x00, 0x02, 0x20, 0x09, 0x00, 0x60, 0x02, 0x60];
+        let mut cpu = CPU6500::new();
+        let actual = run_test(&mut cpu, 18, &mut mem);
+        assert_eq!(vec!(
+            Read(0x00),
+            Read(0x01),
+            Read(0x02),
+            Write(0x01ff, 0x00),
+            Write(0x01fe, 0x02),
+            Read(0x04),
+            Read(0x05),
+            Read(0x06),
+            Write(0x01fd, 0x00),
+            Write(0x01fc, 0x06),
+            Read(0x09),
+            Read(0x0a),
+            Read(0x01fc),
+            Read(0x01fd),
+            Read(0x07),
+            Read(0x08),
+            Read(0x01fe),
+            Read(0x01ff)
+        ), actual);
+    }
+
+    fn run_test(cpu: &mut CPU6500, cycle_count: u128, mem: &mut [u8]) -> Vec<IORequest> {
+        let mut ram = [0; 0x10000];
+        let mut result = Vec::new();
+        let mut io_req = cpu.run_from(0);
+        result.push(io_req.clone());
+        while cpu.cycle_count() < cycle_count {
+            io_req = match io_req {
+                Read(addr) => {
+                    if (addr as usize) < mem.len() {
+                        cpu.read_result(mem[addr as usize])
+                    } else {
+                        cpu.read_result(ram[addr as usize])
+                    }
+                },
+                Write(addr, val) => {
+                    if (addr as usize) < mem.len() {
+                        mem[addr as usize] = val;
+                    } else {
+                        ram[addr as usize] = val;
+                    }
+                    cpu.write_result()
+                },
+                Fault(_) => return result
+            };
+            result.push(io_req.clone());
+        }
+        result
     }
 }
