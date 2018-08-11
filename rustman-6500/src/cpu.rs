@@ -180,7 +180,11 @@ impl CPU6500 {
             0x9d => self.abs_x_addr(CPU6500::sta),
             0xd8 => self.implied(CPU6500::cld),
             0xa0 => self.imm(CPU6500::ldy),
+            0xa1 => self.ind_x(CPU6500::lda),
             0xa2 => self.imm(CPU6500::ldx),
+            0xa4 => self.zpg(CPU6500::ldy),
+            0xa5 => self.zpg(CPU6500::lda),
+            0xa6 => self.zpg(CPU6500::ldx),
             0xa9 => self.imm(CPU6500::lda),
             0xaa => self.implied(CPU6500::tax),
             0xac => self.abs(CPU6500::ldy),
@@ -188,6 +192,11 @@ impl CPU6500 {
             0xae => self.abs(CPU6500::ldx),
             0xb0 => self.rel_addr(CPU6500::bcs),
             0xb1 => self.ind_y(CPU6500::lda),
+            0xb4 => self.zpg_x(CPU6500::ldy),
+            0xb5 => self.zpg_x(CPU6500::lda),
+            0xb6 => self.zpg_y(CPU6500::ldx),
+            0xb9 => self.abs_y(CPU6500::lda),
+            0xbc => self.abs_x(CPU6500::ldy),
             0xbd => self.abs_x(CPU6500::lda),
             0xbe => self.abs_y(CPU6500::ldx),
             0xc0 => self.imm(CPU6500::cpy),
@@ -283,7 +292,7 @@ impl CPU6500 {
                 let hi = addr & 0xFF00;
                 let mut real_addr = cpu.reg_x as u16 + val;
                 real_addr = hi | (real_addr & 0xFF);
-                f(cpu, addr)
+                f(cpu, real_addr)
             })
         })
     }
