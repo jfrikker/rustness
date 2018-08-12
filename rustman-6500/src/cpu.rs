@@ -148,9 +148,15 @@ impl CPU6500 {
     fn execute_op(&mut self, opcode: u8) -> IORequest {
         println!("running {:x?}", opcode);
         match opcode {
+            0x01 => self.ind_x(CPU6500::ora),
             0x05 => self.zpg(CPU6500::ora),
             0x09 => self.imm(CPU6500::ora),
             0x10 => self.rel_addr(CPU6500::bpl),
+            0x11 => self.ind_y(CPU6500::ora),
+            0x15 => self.zpg_x(CPU6500::ora),
+            0x0d => self.abs(CPU6500::ora),
+            0x19 => self.abs_y(CPU6500::ora),
+            0x1d => self.abs_x(CPU6500::ora),
             0x20 => self.abs_addr(CPU6500::jsr),
             0x21 => self.ind_x(CPU6500::and),
             0x24 => self.zpg(CPU6500::bit),
@@ -161,6 +167,7 @@ impl CPU6500 {
             0x2d => self.abs(CPU6500::and),
             0x31 => self.ind_y(CPU6500::and),
             0x35 => self.zpg_x(CPU6500::and),
+            0x38 => self.implied(CPU6500::sec),
             0x39 => self.abs_y(CPU6500::and),
             0x3d => self.abs_x(CPU6500::and),
             0x48 => self.implied(CPU6500::pha),
@@ -216,8 +223,10 @@ impl CPU6500 {
             0xe0 => self.imm(CPU6500::cpx),
             0xe4 => self.zpg(CPU6500::cpx),
             0xe6 => self.zpg_addr(CPU6500::inc),
+            0xe8 => self.implied(CPU6500::inx),
             0xec => self.abs(CPU6500::cpx),
             0xee => self.abs_addr(CPU6500::inc),
+            0xf0 => self.rel_addr(CPU6500::beq),
             0xf6 => self.zpg_x_addr(CPU6500::inc),
             0xfe => self.abs_x_addr(CPU6500::inc),
             op => return IORequest::Fault(op)
@@ -393,6 +402,13 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn beq(&mut self, addr: u16) -> IORequest {
+        if self.flag_z {
+            self.reg_pc = addr;
+        }
+        self.execute()
+    }
+
     fn bit(&mut self, val: u8) -> IORequest {
         self.flag_n = 0x80 & val != 0;
         self.flag_v = 0x40 & val != 0;
@@ -464,6 +480,13 @@ impl CPU6500 {
             cpu.set_nz(val);
             cpu.write(addr, val, |cpu| cpu.execute())
         })
+    }
+
+    fn inx(&mut self) -> IORequest {
+        self.reg_x = self.reg_x.wrapping_add(1);
+        let reg_x = self.reg_x;
+        self.set_nz(reg_x);
+        self.execute()
     }
 
     fn iny(&mut self) -> IORequest {
@@ -550,6 +573,11 @@ impl CPU6500 {
             cpu.reg_pc = val + 1;
             cpu.execute()
         })
+    }
+
+    fn sec(&mut self) -> IORequest {
+        self.flag_c = true;
+        self.execute()
     }
 
     fn sei(&mut self) -> IORequest {

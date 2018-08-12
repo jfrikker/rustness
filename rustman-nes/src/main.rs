@@ -41,7 +41,7 @@ pub fn main() -> io::Result<()> {
             println!("nmi");
             io_req = cpu.nmi();
             println!("{}: {:x?}", cpu.cycle_count(), io_req);
-        } else if cpu.cycle_count() > 100500 {
+        } else if cpu.cycle_count() > 101000 {
             return Ok(())
         }
     }
