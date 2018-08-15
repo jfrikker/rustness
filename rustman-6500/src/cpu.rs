@@ -151,9 +151,11 @@ impl CPU6500 {
             0x01 => self.ind_x(CPU6500::ora),
             0x05 => self.zpg(CPU6500::ora),
             0x09 => self.imm(CPU6500::ora),
+            0x0a => self.implied(CPU6500::asl_a),
             0x10 => self.rel_addr(CPU6500::bpl),
             0x11 => self.ind_y(CPU6500::ora),
             0x15 => self.zpg_x(CPU6500::ora),
+            0x18 => self.implied(CPU6500::clc),
             0x0d => self.abs(CPU6500::ora),
             0x19 => self.abs_y(CPU6500::ora),
             0x1d => self.abs_x(CPU6500::ora),
@@ -170,17 +172,21 @@ impl CPU6500 {
             0x38 => self.implied(CPU6500::sec),
             0x39 => self.abs_y(CPU6500::and),
             0x3d => self.abs_x(CPU6500::and),
+            0x45 => self.zpg(CPU6500::eor),
             0x48 => self.implied(CPU6500::pha),
             0x4a => self.implied(CPU6500::lsr_a),
             0x4c => self.abs_addr(CPU6500::jmp),
             0x60 => self.implied(CPU6500::rts),
             0x68 => self.implied(CPU6500::pla),
+            0x6c => self.ind_addr(CPU6500::jmp),
             0x78 => self.implied(CPU6500::sei),
+            0x7e => self.abs_x_addr(CPU6500::ror),
             0x85 => self.zpg_addr(CPU6500::sta),
             0x86 => self.zpg_addr(CPU6500::stx),
             0x88 => self.implied(CPU6500::dey),
             0x8a => self.implied(CPU6500::txa),
             0x8d => self.abs_addr(CPU6500::sta),
+            0x90 => self.rel_addr(CPU6500::bcc),
             0x91 => self.ind_y_addr(CPU6500::sta),
             0x99 => self.abs_y_addr(CPU6500::sta),
             0x9a => self.implied(CPU6500::txs),
@@ -192,6 +198,7 @@ impl CPU6500 {
             0xa4 => self.zpg(CPU6500::ldy),
             0xa5 => self.zpg(CPU6500::lda),
             0xa6 => self.zpg(CPU6500::ldx),
+            0xa8 => self.implied(CPU6500::tay),
             0xa9 => self.imm(CPU6500::lda),
             0xaa => self.implied(CPU6500::tax),
             0xac => self.abs(CPU6500::ldy),
@@ -215,6 +222,7 @@ impl CPU6500 {
             0xca => self.implied(CPU6500::dex),
             0xcc => self.abs(CPU6500::cpy),
             0xcd => self.abs(CPU6500::cmp),
+            0xce => self.abs_addr(CPU6500::dec),
             0xd0 => self.rel_addr(CPU6500::bne),
             0xd1 => self.ind_y(CPU6500::cmp),
             0xd5 => self.zpg_x(CPU6500::cmp),
@@ -228,6 +236,7 @@ impl CPU6500 {
             0xee => self.abs_addr(CPU6500::inc),
             0xf0 => self.rel_addr(CPU6500::beq),
             0xf6 => self.zpg_x_addr(CPU6500::inc),
+            0xf9 => self.abs_y(CPU6500::sbc),
             0xfe => self.abs_x_addr(CPU6500::inc),
             op => return IORequest::Fault(op)
         }
@@ -285,6 +294,14 @@ impl CPU6500 {
         self.reg_pc += 1;
         let pc = self.reg_pc;
         self.read(pc, |cpu, _| f(cpu))
+    }
+
+    fn ind_addr<T: 'static + FnOnce(&mut CPU6500, u16) -> IORequest>(&mut self, f: T) -> IORequest {
+        let addr = self.reg_pc + 1;
+        self.reg_pc += 3;
+        self.read_u16(addr, |cpu, addr| {
+            cpu.read_u16(addr, f)
+        })
     }
 
     fn ind_x<T: 'static + FnOnce(&mut CPU6500, u8) -> IORequest>(&mut self, f: T) -> IORequest {
@@ -395,6 +412,23 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn asl_a(&mut self) -> IORequest {
+        let mut reg_a = self.reg_a;
+        let carry = reg_a & 0x80 != 0;
+        reg_a = reg_a << 1;
+        self.flag_c = carry;
+        self.set_nz(reg_a);
+        self.reg_a = reg_a;
+        self.execute()
+    }
+
+    fn bcc(&mut self, addr: u16) -> IORequest {
+        if !self.flag_c {
+            self.reg_pc = addr;
+        }
+        self.execute()
+    }
+
     fn bcs(&mut self, addr: u16) -> IORequest {
         if self.flag_c {
             self.reg_pc = addr;
@@ -431,6 +465,11 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn clc(&mut self) -> IORequest {
+        self.flag_c = false;
+        self.execute()
+    }
+
     fn cld(&mut self) -> IORequest {
         self.flag_d = false;
         self.execute()
@@ -460,6 +499,14 @@ impl CPU6500 {
         self.execute()
     }
 
+    fn dec(&mut self, addr: u16) -> IORequest {
+        self.read(addr, move |cpu, val| {
+            let val = val.wrapping_sub(1);
+            cpu.set_nz(val);
+            cpu.write(addr, val, |cpu| cpu.execute())
+        })
+    }
+
     fn dex(&mut self) -> IORequest {
         self.reg_x = self.reg_x.wrapping_sub(1);
         let reg_x = self.reg_x;
@@ -471,6 +518,13 @@ impl CPU6500 {
         self.reg_y = self.reg_y.wrapping_sub(1);
         let reg_y = self.reg_y;
         self.set_nz(reg_y);
+        self.execute()
+    }
+
+    fn eor(&mut self, val: u8) -> IORequest {
+        self.reg_a = self.reg_a ^ val;
+        let reg_a = self.reg_a;
+        self.set_nz(reg_a);
         self.execute()
     }
 
@@ -563,16 +617,46 @@ impl CPU6500 {
             reg_a += 1;
         }
         self.flag_c = carry;
-        self.flag_z = reg_a == 0;
+        self.set_nz(reg_a);
         self.reg_a = reg_a;
         self.execute()
     }
 
-    fn rts(&mut self,) -> IORequest {
+    fn ror(&mut self, addr: u16) -> IORequest {
+        self.read(addr, move |cpu, mut val| {
+            let carry = val & 0x01 != 0;
+            val = val >> 1;
+            if cpu.flag_c {
+                val += 0x80;
+            }
+            cpu.flag_c = carry;
+            cpu.set_nz(val);
+            cpu.write(addr, val, CPU6500::execute)
+        })
+    }
+
+    fn rts(&mut self) -> IORequest {
         self.pop_u16(|cpu, val| {
             cpu.reg_pc = val + 1;
             cpu.execute()
         })
+    }
+
+    fn sbc(&mut self, val: u8) -> IORequest {
+        let m = self.reg_a as u16;
+        let mut n = val as u16;
+        if !self.flag_c {
+            n += 1;
+        }
+
+        let result = m.wrapping_sub(n);
+        let result_8 = result as u8;
+        self.reg_a = result_8;
+        self.set_nz(result_8);
+        self.flag_c = result & 0x100 == 0;
+        let flag_n = self.flag_n;
+        self.flag_v = (m <= 0x7f && n <= 0x7f && flag_n) || (m >= 0x80 && n >= 0x80 && !flag_n);
+        self.execute()
     }
 
     fn sec(&mut self) -> IORequest {
@@ -599,6 +683,13 @@ impl CPU6500 {
         self.reg_x = self.reg_a;
         let reg_x = self.reg_x;
         self.set_nz(reg_x);
+        self.execute()
+    }
+
+    fn tay(&mut self) -> IORequest {
+        self.reg_y = self.reg_a;
+        let reg_y = self.reg_y;
+        self.set_nz(reg_y);
         self.execute()
     }
 
