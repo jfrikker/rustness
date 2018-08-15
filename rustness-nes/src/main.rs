@@ -1,8 +1,8 @@
-extern crate rustman_6500;
+extern crate rustness_6500;
 
 use std::io::{self, Read};
 use std::fs::File;
-use rustman_6500::cpu::IORequest;
+use rustness_6500::cpu::IORequest;
 
 pub fn main() -> io::Result<()> {
     let mut f = File::open("smbrom")?;
@@ -11,7 +11,7 @@ pub fn main() -> io::Result<()> {
 
     let mut ram: [u8; 0x800] = [0; 0x800];
 
-    let mut cpu = rustman_6500::cpu::CPU6500::new();
+    let mut cpu = rustness_6500::cpu::CPU6500::new();
     let mut io_req = cpu.reset();
     println!("{:x?}", io_req);
     loop {

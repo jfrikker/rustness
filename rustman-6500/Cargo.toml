@@ -1,6 +1,0 @@
-[package]
-name = "rustman-6500"
-version = "0.1.0"
-authors = ["Joe Frikker <jfrikker@gmail.com>"]
-
-[dependencies]

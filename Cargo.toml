@@ -1,6 +1,6 @@
 [workspace]
 
 members = [
-    "rustman-6500",
-    "rustman-nes"
+    "rustness-6500",
+    "rustness-nes"
 ]

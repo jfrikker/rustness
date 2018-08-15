@@ -1,7 +1,6 @@
 [package]
-name = "rustman"
+name = "rustness-6500"
 version = "0.1.0"
 authors = ["Joe Frikker <jfrikker@gmail.com>"]
 
 [dependencies]
-rustman-6500 = { path = "../rustman-6500" }
